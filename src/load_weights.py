@@ -1,10 +1,7 @@
 from mlx.core import load as load_safetensors
 import torch
-from llama2 import Decoder
-from time import time
 from sentencepiece import SentencePieceProcessor
-import torch._dynamo
-torch._dynamo.config.suppress_errors = True
+
 
 
 def get_model_size_in_gb(model):
@@ -54,33 +51,3 @@ def get_tokenizer(tokenizer_path: str):
     tokenizer = SentencePieceProcessor()
     tokenizer.load(tokenizer_path)
     return tokenizer
-
-
-with torch.inference_mode():
-    model = Decoder(vocab_size=32000, num_decoder_layers=22, num_attention_heads=32, num_kv_heads=4, len_embedding=2048, len_sequence=2048, intermediate_size=5632, device=get_device())
-    model = torch.compile(model=model, backend="aot_eager")
-    load_weights(safetensor_path="../models/model.safetensors", model=model, device=get_device(), dtype=torch.float16)
-    tokenizer = get_tokenizer(tokenizer_path="../models/tokenizer.model")
-
-    while(True):
-        prompt = input("Ask me anything: ")
-        formatted_prompt = (
-        f"""
-<|user|>
-{prompt}</s>
-<|assistant|>"""
-    )
-        tokenized_prompt: list[int] = tokenizer.encode(formatted_prompt)
-        model_response = []
-        stop_strings = ["<|user|>", "<|system|>", "</s>"]
-        for i in range(2048-len(tokenized_prompt)):
-            tik = time()
-            out = model.forward(torch.as_tensor(tokenized_prompt+model_response, device=get_device()))
-            tok = time()
-            elapsed = tok-tik
-            out = out.item()
-            model_response.append(out)
-            decoded_model_response = tokenizer.decode(model_response)
-            if any(stop_string in decoded_model_response for stop_string in stop_strings):
-                break
-        print(decoded_model_response)
