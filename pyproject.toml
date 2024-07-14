@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "src"
+version = "0.1.0"
+description = ""
+authors = ["Rahul Shah"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+gguf = "^0.6.0"
+mlx = "^0.14.0"
+torch = "^2.3.0"
+sentencepiece = "^0.2.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
