@@ -30,8 +30,19 @@ def chat(prompt, history):
             break
         yield decoded_model_response
 
+#address a gradio bug where the chat window doesnt fill up the screen, css taken from: https://github.com/gradio-app/gradio/issues/4001#issuecomment-1636785196
+CSS = """
+.contain { display: flex; flex-direction: column; }
+.gradio-container { height: 100vh !important; }
+#component-0 { height: 100%; }
+#chatbot { flex-grow: 1; overflow: auto;}
+"""
+
 with torch.inference_mode():
     model = Decoder(vocab_size=32000, num_decoder_layers=22, num_attention_heads=32, num_kv_heads=4, len_embedding=2048, len_sequence=2048, intermediate_size=5632, device=get_device())
     model = torch.compile(model=model, backend="aot_eager")
+    tik = time()
     load_weights(safetensor_path="../models/model.safetensors", model=model, device=get_device(), dtype=torch.float16)
-    gr.ChatInterface(chat, title="Llama 1.1B", description="Chat with a 1.1 Billion parameter variant of Llama 2!", fill_height = True).launch()
+    tok = time()
+    print("Loaded weights in: ", tok-tik, " seconds")
+    gr.ChatInterface(chat, css=CSS, title="Llama 1.1B", description="Chat with a 1.1 Billion parameter variant of Llama 2!", fill_height = True).launch()
