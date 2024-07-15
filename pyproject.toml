@@ -12,6 +12,7 @@ mlx = "^0.14.0"
 torch = "^2.3.0"
 sentencepiece = "^0.2.0"
 gradio = "^4.38.1"
+tqdm = "^4.66.4"
 
 
 [build-system]
