@@ -22,9 +22,17 @@ def load_weights(safetensor_path: str, model: torch.nn.Module, device, dtype: to
     print(f"Loading tensors: {tensor_names}")
     
     def load_layer_weights(i, weights):
-        
+        # some tensors dont belong to any layer. I just treat i==-1 as a flag to load those tensors in its own thread
+        if i == -1:
+            model.output_layer.weight = torch.nn.Parameter(
+                torch.as_tensor(weights["lm_head.weight"].tolist(), dtype=dtype, device=device))
+            model.norm.gamma = torch.nn.Parameter(
+                torch.as_tensor(weights["model.norm.weight"].tolist(), dtype=dtype, device=device))
+            model.embeddings.weight = torch.nn.Parameter(
+                torch.as_tensor(weights["model.embed_tokens.weight"].tolist(), dtype=dtype, device=device))
+            return
+            
         decoder_layer = model.decoder_layers[i]
-        
         decoder_layer.grouped_query_attention.w_q.weight = torch.nn.Parameter(
             torch.as_tensor(weights["model.layers." + str(i) + ".self_attn.q_proj.weight"].tolist(), dtype=dtype, device=device))
         
@@ -55,8 +63,14 @@ def load_weights(safetensor_path: str, model: torch.nn.Module, device, dtype: to
         return f"Layer {i} weights loaded"
 
     # Using ThreadPoolExecutor for parallel loading
-    with ThreadPoolExecutor(max_workers=2) as executor:
-        futures = [executor.submit(load_layer_weights, i, {k: v for k, v in weights.items() if f"model.layers.{i}" in k}) for i in range(len(model.decoder_layers))]
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        futures = []
+        # some tensors dont belong to any layer. I just treat i==-1 as a flag to load those tensors in its own thread
+        for i in range(-1, len(model.decoder_layers)):
+            if i == -1:
+                futures.append(executor.submit(load_layer_weights, i, weights))
+            else:
+                futures.append(executor.submit(load_layer_weights, i, {k: v for k, v in weights.items() if f"model.layers.{i}" in k}))
         
         # Outer tqdm for overall progress
         with tqdm(total=len(futures), 
@@ -72,14 +86,6 @@ def load_weights(safetensor_path: str, model: torch.nn.Module, device, dtype: to
                 outer_pbar.update(1)
                 outer_pbar.set_postfix_str(result)  # Update tqdm with layer loaded message
     
-    # Final updates outside the tqdm loop
-    model.output_layer.weight = torch.nn.Parameter(
-        torch.as_tensor(weights["lm_head.weight"].tolist(), dtype=dtype, device=device))
-    model.norm.gamma = torch.nn.Parameter(
-        torch.as_tensor(weights["model.norm.weight"].tolist(), dtype=dtype, device=device))
-    model.embeddings.weight = torch.nn.Parameter(
-        torch.as_tensor(weights["model.embed_tokens.weight"].tolist(), dtype=dtype, device=device))
-
 
 def get_device():
     mps_device=torch.device("cpu")
