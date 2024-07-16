@@ -8,6 +8,7 @@ import torch._dynamo
 torch._dynamo.config.suppress_errors = True
 
 
+@torch.inference_mode()
 def chat(prompt, history):
     tokenizer = get_tokenizer(tokenizer_path="models/tokenizer.model")
     formatted_prompt = f"""<|user|>{prompt}</s><|assistant|>"""
@@ -16,10 +17,7 @@ def chat(prompt, history):
     stop_strings = ["<|user|>", "<|system|>", "</s>"]
     for i in range(2048 - len(tokenized_prompt)):
         tik = time()
-        with torch.inference_mode():
-            out = model.forward(
-                torch.as_tensor(tokenized_prompt + model_response, device=get_device())
-            )
+        out = model.forward(torch.as_tensor(tokenized_prompt + model_response, device=get_device()))
         tok = time()
         elapsed = tok - tik
         print((1 / elapsed), " Tokens per second")

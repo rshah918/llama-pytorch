@@ -5,6 +5,9 @@ description = ""
 authors = ["Rahul Shah"]
 readme = "README.md"
 
+[tool.poe.tasks]
+start = [{ cmd = "python3 src/chat.py"}]
+
 [tool.poetry.dependencies]
 python = "^3.11"
 gguf = "^0.6.0"
@@ -14,10 +17,12 @@ sentencepiece = "^0.2.0"
 gradio = "^4.38.1"
 tqdm = "^4.66.4"
 multiprocess = "^0.70.16"
+poethepoet = "^0.27.0"
+pre-commit = "^3.7.1"
 
 [tool.ruff]
 indent-width = 4
-line-length = 100
+line-length = 120
 
 [tool.ruff.lint]
 ignore = [
