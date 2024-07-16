@@ -10,8 +10,9 @@ Notable observations:
     - Llama uses Silu instead of Relu in the MLP block
 '''
 
+
+
 def rotate_half(x):
-    """Rotates half the hidden dims of the input."""
     x1 = x[..., : x.shape[-1] // 2] #first half of the embeddings
     x2 = x[..., x.shape[-1] // 2 :] #second half of the embeddings
     return torch.cat((-x2, x1), dim=-1) # rotate embeddings
@@ -27,16 +28,24 @@ def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
-def set_cos_sin_cache(max_seq_len, embedding_dim, device, dtype):
-        theta = 10000
-        t = torch.arange(max_seq_len, device=device, dtype=dtype)
-        inv_freqs = 1.0 / (theta ** (torch.arange(0, embedding_dim, 2, device=device).float() / embedding_dim))
-        freqs = torch.einsum("i,j->ij", t, inv_freqs)
-        # Different from paper, but it uses a different permutation in order to obtain the same calculation
-        emb = torch.cat((freqs, freqs), dim=-1)
-        cos = emb.cos()[None, None, :, :].to(dtype)
-        sin =  emb.sin()[None, None, :, :].to(dtype)
-        return cos, sin
+def generate_sin_cos(max_seq_len, embedding_dim, device, dtype):
+    """
+    Calculate vector rotation magnitudes
+    Theta calulation from the paper: https://arxiv.org/pdf/2104.09864v5
+        Θ = {θi = 10000^−2(i−1)/d , i ∈ [1, 2, ..., d/2]} 
+        - where i is the position along the sequence dimension, and d is along the embedding dimension
+        - theta base is 10000 for Llama architectures
+    """
+    sequence_positions = torch.arange(max_seq_len, device=device, dtype=dtype).repeat(embedding_dim//2, 1).float()  # (embedding_dim, max_seq_len)
+    theta_base = 10000
+    emb_positions = torch.arange(start=0, end=embedding_dim, step=2, device=device, dtype=dtype).float()  # (embedding_dim/2)
+    theta = 1.0 / (theta_base ** (emb_positions / embedding_dim))  # calculate rotation magnitudes 
+    theta =  sequence_positions * theta.unsqueeze(1)  # unsqueeze for broadcast and complete theta calculation
+    theta = theta.transpose(0,1)  # transpose to get shape (max_seq_len, embedding_dim/2)
+    theta = torch.cat((theta, theta), dim=-1) 
+    cos = torch.cos(theta)[None, None, :, :].to(dtype)  # (1,1,sequence_len, embedding_dim)
+    sin = torch.sin(theta)[None, None, :, :].to(dtype)  # (1,1,sequence_len, embedding_dim)
+    return cos, sin
 
 
 class GroupedQueryAttention(nn.Module):
@@ -47,6 +56,7 @@ class GroupedQueryAttention(nn.Module):
         self.embedding_dim = embedding_dim
         self.head_dim = head_dim
         self.len_sequence = len_sequence
+        self.device = device
         self.w_q = nn.Linear(embedding_dim, num_query_heads * head_dim, device=device, bias=False)
         self.w_k = nn.Linear(embedding_dim,num_kv_heads * head_dim, device=device, bias=False)
         self.w_v = nn.Linear(embedding_dim,num_kv_heads * head_dim, device=device, bias=False)
@@ -66,7 +76,7 @@ class GroupedQueryAttention(nn.Module):
         key = key.view(1, x.shape[0], self.num_kv_heads, self.head_dim)
         value = value.view(1, x.shape[0], self.num_kv_heads, self.head_dim)
 
-        cos, sin = set_cos_sin_cache(max_seq_len=self.len_sequence, embedding_dim=self.head_dim, device=torch.device("mps"), dtype=torch.float16)
+        cos, sin = generate_sin_cos(max_seq_len=self.len_sequence, embedding_dim=self.head_dim, device=self.device, dtype=torch.float16)
         query, key = apply_rotary_pos_emb(query, key, cos, sin, torch.arange(0,x.shape[0]))
         # remove batch dimension
         query = query[0]
