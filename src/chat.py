@@ -38,11 +38,10 @@ CSS = """
 #chatbot { flex-grow: 1; overflow: auto;}
 """
 
-with torch.inference_mode():
-    model = Decoder(vocab_size=32000, num_decoder_layers=22, num_attention_heads=32, num_kv_heads=4, len_embedding=2048, len_sequence=2048, intermediate_size=5632, device=get_device())
-    model = torch.compile(model=model, backend="aot_eager")
-    tik = time()
-    load_weights(safetensor_path="../models/model.safetensors", model=model, device=get_device(), dtype=torch.float16)
-    tok = time()
-    print("Loaded weights in: ", tok-tik, " seconds")
-    gr.ChatInterface(chat, css=CSS, title="Llama 1.1B", description="Chat with a 1.1 Billion parameter variant of Llama 2!", fill_height = True).launch()
+model = Decoder(vocab_size=32000, num_decoder_layers=22, num_attention_heads=32, num_kv_heads=4, len_embedding=2048, len_sequence=2048, intermediate_size=5632, device=get_device())
+model = torch.compile(model=model, backend="aot_eager")
+tik = time()
+load_weights(safetensor_path="../models/model.safetensors", model=model, device=get_device(), dtype=torch.float16)
+tok = time()
+print("Loaded weights in: ", tok-tik, " seconds")
+gr.ChatInterface(chat, css=CSS, title="Llama 1.1B", description="Chat with a 1.1 Billion parameter variant of Llama 2!", fill_height = True).launch()
