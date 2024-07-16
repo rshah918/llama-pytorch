@@ -1,10 +1,11 @@
 import multiprocessing
 from mlx.core import load as load_safetensors
+import mlx.core as mx
 import torch
 from tqdm import tqdm
 from sentencepiece import SentencePieceProcessor
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
-
+import numpy as np
 
 def get_model_size_in_gb(model):
     total_params = sum(p.numel() for p in model.parameters())
@@ -17,40 +18,40 @@ def load_layer_weights(i, weights, model, dtype, device):
     # some tensors dont belong to any layer. I just treat i==-1 as a flag to load those tensors in its own thread
     if i == -1:
         model.output_layer.weight = torch.nn.Parameter(
-            torch.as_tensor(weights["lm_head.weight"].tolist(), dtype=dtype, device=device))
+            torch.as_tensor(np.array(weights["lm_head.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
         model.norm.gamma = torch.nn.Parameter(
-            torch.as_tensor(weights["model.norm.weight"].tolist(), dtype=dtype, device=device))
-        model.embeddings.weight = torch.nn.Parameter(
-            torch.as_tensor(weights["model.embed_tokens.weight"].tolist(), dtype=dtype, device=device))
+            torch.as_tensor(np.array(weights["model.norm.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
+        model.embeddings.weight = torch.nn.Parameter(   
+            torch.as_tensor(np.array(weights["model.embed_tokens.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
         return
         
     decoder_layer = model.decoder_layers[i]
     decoder_layer.grouped_query_attention.w_q.weight = torch.nn.Parameter(
-        torch.as_tensor(weights["model.layers." + str(i) + ".self_attn.q_proj.weight"].tolist(), dtype=dtype, device=device))
+        torch.as_tensor(np.array(weights["model.layers." + str(i) + ".self_attn.q_proj.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
 
     decoder_layer.grouped_query_attention.w_v.weight = torch.nn.Parameter(
-        torch.as_tensor(weights["model.layers." + str(i) + ".self_attn.v_proj.weight"].tolist(), dtype=dtype, device=device))
+        torch.as_tensor(np.array(weights["model.layers." + str(i) + ".self_attn.v_proj.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
 
     decoder_layer.grouped_query_attention.w_k.weight = torch.nn.Parameter(
-        torch.as_tensor(weights["model.layers." + str(i) + ".self_attn.k_proj.weight"].tolist(), dtype=dtype, device=device))
+        torch.as_tensor(np.array(weights["model.layers." + str(i) + ".self_attn.k_proj.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
 
     decoder_layer.grouped_query_attention.w_o.weight = torch.nn.Parameter(
-        torch.as_tensor(weights["model.layers." + str(i) + ".self_attn.o_proj.weight"].tolist(), dtype=dtype, device=device))
+        torch.as_tensor(np.array(weights["model.layers." + str(i) + ".self_attn.o_proj.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
 
     decoder_layer.attention_norm.gamma = torch.nn.Parameter(
-        torch.as_tensor(weights["model.layers." + str(i) + ".input_layernorm.weight"].tolist(), dtype=dtype, device=device))
+        torch.as_tensor(np.array(weights["model.layers." + str(i) + ".input_layernorm.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
 
     decoder_layer.feedforward_norm.gamma = torch.nn.Parameter(
-        torch.as_tensor(weights["model.layers." + str(i) + ".post_attention_layernorm.weight"].tolist(), dtype=dtype, device=device))
+        torch.as_tensor(np.array(weights["model.layers." + str(i) + ".post_attention_layernorm.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
 
     decoder_layer.feedforward.ffn_gate.weight = torch.nn.Parameter(
-        torch.as_tensor(weights["model.layers." + str(i) + ".mlp.gate_proj.weight"].tolist(), dtype=dtype, device=device))
+        torch.as_tensor(np.array(weights["model.layers." + str(i) + ".mlp.gate_proj.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
 
     decoder_layer.feedforward.ffn_up_projection.weight = torch.nn.Parameter(
-        torch.as_tensor(weights["model.layers." + str(i) + ".mlp.up_proj.weight"].tolist(), dtype=dtype, device=device))
+        torch.as_tensor(np.array(weights["model.layers." + str(i) + ".mlp.up_proj.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
 
     decoder_layer.feedforward.ffn_down_projection.weight = torch.nn.Parameter(
-        torch.as_tensor(weights["model.layers." + str(i) + ".mlp.down_proj.weight"].tolist(), dtype=dtype, device=device))
+        torch.as_tensor(np.array(weights["model.layers." + str(i) + ".mlp.down_proj.weight"].astype(mx.float16), copy=False), dtype=dtype, device=device))
 
     return f"Layer {i} weights loaded"
 
