@@ -45,9 +45,7 @@ def generate_sin_cos(max_seq_len, embedding_dim, device, dtype):
         start=0, end=embedding_dim, step=2, device=device, dtype=dtype
     ).float()  # (embedding_dim/2)
     theta = 1.0 / (theta_base ** (emb_positions / embedding_dim))  # calculate rotation magnitudes
-    theta = sequence_positions * theta.unsqueeze(
-        1
-    )  # unsqueeze for broadcast and complete theta calculation
+    theta = sequence_positions * theta.unsqueeze(1)  # unsqueeze for broadcast and complete theta calculation
     theta = theta.transpose(0, 1)  # transpose to get shape (max_seq_len, embedding_dim/2)
     theta = torch.cat((theta, theta), dim=-1)
     cos = torch.cos(theta)[None, None, :, :].to(dtype)  # (1,1,sequence_len, embedding_dim)
@@ -56,9 +54,7 @@ def generate_sin_cos(max_seq_len, embedding_dim, device, dtype):
 
 
 class GroupedQueryAttention(nn.Module):
-    def __init__(
-        self, num_query_heads, head_dim, num_kv_heads, embedding_dim, len_sequence, device
-    ):
+    def __init__(self, num_query_heads, head_dim, num_kv_heads, embedding_dim, len_sequence, device):
         super().__init__()
         self.num_query_heads = num_query_heads
         self.num_kv_heads = num_kv_heads
@@ -148,17 +144,11 @@ class GatedLinearUnit(nn.Module):
     def __init__(self, len_embedding, hidden_dimension, device):
         super(GatedLinearUnit, self).__init__()
         self.ffn_gate = nn.Linear(len_embedding, hidden_dimension, device=device, bias=False)
-        self.ffn_down_projection = nn.Linear(
-            hidden_dimension, len_embedding, device=device, bias=False
-        )
-        self.ffn_up_projection = nn.Linear(
-            len_embedding, hidden_dimension, device=device, bias=False
-        )
+        self.ffn_down_projection = nn.Linear(hidden_dimension, len_embedding, device=device, bias=False)
+        self.ffn_up_projection = nn.Linear(len_embedding, hidden_dimension, device=device, bias=False)
 
     def forward(self, x):
-        out = nn.functional.silu(self.ffn_gate(x)) * self.ffn_up_projection(
-            x
-        )  # elementwise multiplication
+        out = nn.functional.silu(self.ffn_gate(x)) * self.ffn_up_projection(x)  # elementwise multiplication
         out = self.ffn_down_projection(out)
         return out
 
