@@ -13,29 +13,56 @@ Notable observations:
 
 
 def rotate_half(x):
+    """
+    GPT-NeoX style rotary embeddings.
+
+    This function splits the input tensor into two halves along the embedding dimension and then rotates them by 90 degrees
+
+    For more details, see:
+    - Roformer paper: https://arxiv.org/pdf/2104.09864
+    - GPT-NeoX paper: https://arxiv.org/pdf/2204.06745
+
+    Args:
+        x (torch.Tensor): Input tensor with shape (..., 2 * d), where d is the dimension of the rotary embeddings.
+
+    Returns:
+        torch.Tensor: Output tensor with the halves rotated, shape (..., 2 * d).
+    """
     x1 = x[..., : x.shape[-1] // 2]  # first half of the embeddings
     x2 = x[..., x.shape[-1] // 2 :]  # second half of the embeddings
-    return torch.cat((-x2, x1), dim=-1)  # rotate embeddings
+    return torch.cat((-x2, x1), dim=-1)  # perform rotation
 
 
-def apply_rotary_pos_emb(q, k, cos, sin, position_ids):
-    # The first two dimensions of cos and sin are always 1, so we can `squeeze` them.
-    cos = cos.squeeze(1).squeeze(0)  # [seq_len, dim]
-    sin = sin.squeeze(1).squeeze(0)  # [seq_len, dim]
-    cos = cos[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
-    sin = sin[position_ids].unsqueeze(1)  # [bs, 1, seq_len, dim]
+def apply_rotary_embeddings(q, k, cos, sin, position_ids):
+    cos = cos[position_ids].unsqueeze(1)  # [seq_len, 1, dim]
+    sin = sin[position_ids].unsqueeze(1)  # [seq_len, 1, dim]
     q_embed = (q * cos) + (rotate_half(q) * sin)
     k_embed = (k * cos) + (rotate_half(k) * sin)
     return q_embed, k_embed
 
 
-def generate_sin_cos(max_seq_len, embedding_dim, device, dtype):
+def generate_rotation_magnitudes(max_seq_len: int, embedding_dim: int, device: torch.device, dtype: torch.dtype):
     """
-    Calculate vector rotation magnitudes
-    Theta calulation from the paper: https://arxiv.org/pdf/2104.09864v5
-        Θ = {θi = 10000^−2(i−1)/d , i ∈ [1, 2, ..., d/2]}
-        - where i is the position along the sequence dimension, and d is along the embedding dimension
+    Calculate vector rotation magnitudes.
+
+    This function generates the cosine and sine components used for rotary positional embeddings.
+    The theta calculation follows the method described in the Roformer paper: https://arxiv.org/pdf/2104.09864v5
+
+    Theta calculation formula:
+        Θ = {θ_i = 10000^−2(i−1)/d , i ∈ [1, 2, ..., d/2]}
+    where:
+        - i is the position along the sequence dimension
+        - d is the embedding dimension
         - theta base is 10000 for Llama architectures
+
+    Args:
+        max_seq_len (int): Maximum sequence length.
+        embedding_dim (int): Embedding dimension, should be even.
+        device (torch.device): Device to create the tensors on.
+        dtype (torch.dtype): Data type of the tensors.
+
+    Returns:
+        tuple: Two tensors (cos, sin) of shape (max_seq_len, embedding_dim), representing the cosine and sine components for the rotary embeddings.
     """
     sequence_positions = (
         torch.arange(max_seq_len, device=device, dtype=dtype).repeat(embedding_dim // 2, 1).float()
@@ -48,19 +75,42 @@ def generate_sin_cos(max_seq_len, embedding_dim, device, dtype):
     theta = sequence_positions * theta.unsqueeze(1)  # unsqueeze for broadcast and complete theta calculation
     theta = theta.transpose(0, 1)  # transpose to get shape (max_seq_len, embedding_dim/2)
     theta = torch.cat((theta, theta), dim=-1)
-    cos = torch.cos(theta)[None, None, :, :].to(dtype)  # (1,1,sequence_len, embedding_dim)
-    sin = torch.sin(theta)[None, None, :, :].to(dtype)  # (1,1,sequence_len, embedding_dim)
+    # (sequence_len, embedding_dim)
+    cos = torch.cos(theta)
+    sin = torch.sin(theta)
     return cos, sin
 
 
 class GroupedQueryAttention(nn.Module):
-    def __init__(self, num_query_heads, head_dim, num_kv_heads, embedding_dim, len_sequence, device):
+    """
+    Grouped Query Attention module.
+
+    This module implements grouped query attention, an efficient variant of multihead attention where the number of key/value
+    heads (`num_kv_heads`) is fewer than the number of query heads (`num_query_heads`). Each query head independently computes attention
+    across grouped key/value heads, concatenates the results, and projects them back to the original embedding dimension.
+
+    Args:
+        num_query_heads (int): Number of query attention heads.
+        head_dim (int): Dimensionality of each attention head.
+        num_kv_heads (int): Number of key-value attention heads.
+        embedding_dim (int): Dimensionality of the input embeddings.
+        max_seq_len (int): Max length of the input sequence.
+        device (torch.device): Device on which to create the module.
+
+    Attributes:
+        w_q (nn.Linear): Linear layer for query projection.
+        w_k (nn.Linear): Linear layer for key projection.
+        w_v (nn.Linear): Linear layer for value projection.
+        w_o (nn.Linear): Linear layer for output projection.
+    """
+
+    def __init__(self, num_query_heads, head_dim, num_kv_heads, embedding_dim, max_seq_len, device):
         super().__init__()
         self.num_query_heads = num_query_heads
         self.num_kv_heads = num_kv_heads
         self.embedding_dim = embedding_dim
         self.head_dim = head_dim
-        self.len_sequence = len_sequence
+        self.max_seq_len = max_seq_len
         self.device = device
         self.w_q = nn.Linear(embedding_dim, num_query_heads * head_dim, device=device, bias=False)
         self.w_k = nn.Linear(embedding_dim, num_kv_heads * head_dim, device=device, bias=False)
@@ -68,6 +118,7 @@ class GroupedQueryAttention(nn.Module):
         self.w_o = nn.Linear(num_query_heads * head_dim, embedding_dim, device=device, bias=False)
 
     def forward(self, x, mask=None):
+        len_sequence = x.shape[0]
         # Get query, key, and value
         query = self.w_q(x)
         key = self.w_k(x)
@@ -77,17 +128,17 @@ class GroupedQueryAttention(nn.Module):
         key = torch.unsqueeze(key, 0)
         value = torch.unsqueeze(value, 0)
         # (batch, seq, num_heads, head_dim)
-        query = query.view(1, x.shape[0], self.num_query_heads, self.head_dim)
-        key = key.view(1, x.shape[0], self.num_kv_heads, self.head_dim)
-        value = value.view(1, x.shape[0], self.num_kv_heads, self.head_dim)
-
-        cos, sin = generate_sin_cos(
-            max_seq_len=self.len_sequence,
+        query = query.view(1, len_sequence, self.num_query_heads, self.head_dim)
+        key = key.view(1, len_sequence, self.num_kv_heads, self.head_dim)
+        value = value.view(1, len_sequence, self.num_kv_heads, self.head_dim)
+        # rotary position embeddings
+        cos, sin = generate_rotation_magnitudes(
+            max_seq_len=self.max_seq_len,
             embedding_dim=self.head_dim,
             device=self.device,
             dtype=torch.float16,
         )
-        query, key = apply_rotary_pos_emb(query, key, cos, sin, torch.arange(0, x.shape[0]))
+        query, key = apply_rotary_embeddings(query, key, cos, sin, torch.arange(0, len_sequence))
         # remove batch dimension
         query = query[0]
         key = key[0]
@@ -104,7 +155,7 @@ class GroupedQueryAttention(nn.Module):
         attention_scores = torch.matmul(query, key.transpose(1, 2)) / math.sqrt(
             self.head_dim
         )  # (num_query_heads, seq_len, seq_len)
-        mask = torch.tril(torch.ones((x.shape[0], x.shape[0]), device=query.device)).unsqueeze(
+        mask = torch.tril(torch.ones((x.shape[0], len_sequence), device=query.device)).unsqueeze(
             0
         )  # (1, seq_len, seq_len)
         attention_scores = attention_scores.masked_fill(mask == 0, float("-inf"))
@@ -136,9 +187,10 @@ class RMSNorm(nn.Module):
 
 class GatedLinearUnit(nn.Module):
     """
-    The Llama 2 7B architecture employs Gated Linear Units (GLUs). The concept involves adding an additional linear layer to selectively downweight certain activations, effectively serving as a "gate".
-    This mechanism activates only a subset of the downstream subnetworks, encouraging them to specialize.
-    Intuitively, this makes sense. The human brain is made up of specialized regions (vision, audio, reasoning, etc). Gating forces the model to recreate the same architecture.
+    Gated Linear Unit (GLU) module used in the Llama architecture.
+
+    GLUs enhance neural network architectures by selectively downweighting activations through an additional linear layer acting as a gate.
+    This mechanism encourages specialization in downstream subnetworks, mimicking the modular structure observed in the human brain.
     """
 
     def __init__(self, len_embedding, hidden_dimension, device):
@@ -232,6 +284,6 @@ class Decoder(nn.Module):
         decoder_layers_output = self.decoder_layers(x)
         output_norm = self.norm(decoder_layers_output)
         logits = self.output_layer(output_norm).float()  # shape: [seq_length, vocab_size]
-        logits = logits[-1, :]
-        probabilities = nn.functional.softmax(logits, dim=-1)  # shape: [seq_length, vocab_size]
-        return torch.argmax(probabilities, dim=-1)
+        logits = logits[-1, :]  # pull the probability distribution for the last token in the sequence
+        probabilities = nn.functional.softmax(logits, dim=-1)  # convert to softmax probability distribution
+        return torch.argmax(probabilities, dim=-1)  # get the token index for the next most likely token in the sequence
