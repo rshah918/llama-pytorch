@@ -13,6 +13,12 @@ This project implements the Llama 2 neural net architecture from scratch in PyTo
 
 The purpose of this project is to understand how to build and deploy a sophisticated language model beyond small toy examples. Constructing Llama 2 from the ground up generates insight into the architecture and mechanics of state-of-the-art LLM's, as well as practical experience in managing model weights, tokenization, and inference.
 
+## Demo
+
+[Watch the Demo](https://www.youtube.com/watch?v=virODFK7uMU)
+
+![Screenshot](https://github.com/user-attachments/assets/e87b31c2-0b37-4f36-9ca3-013e7788eaa1)
+
 ## Setup
 
 1. **Download Model and Tokenizer**
@@ -30,12 +36,6 @@ The purpose of this project is to understand how to build and deploy a sophistic
 
 5. **Start Chatting**
    - Load the weights and start the inference pipeline with `poe start`.
-
-## Demo
-
-[Watch the Demo](https://www.youtube.com/watch?v=virODFK7uMU)
-
-![Screenshot](https://github.com/user-attachments/assets/e87b31c2-0b37-4f36-9ca3-013e7788eaa1)
 
 ## Notes
 
