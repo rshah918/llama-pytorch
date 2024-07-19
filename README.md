@@ -8,7 +8,7 @@ This project implements the Llama 2 neural net architecture from scratch in PyTo
 
 ### Highlights:
 - **Grouped Query Attention:** An efficient variant of multihead attention, also used in Llama 3.
-- **Gated Linear Unit (GLU):** Newer GPT variants use GLUs in the MLP block of each Decoder layer.
+- **Gated Linear Unit (GLU):** Newer GPT variants use GLUs in the MLP block of each decoder layer.
 - **Manual Loading of SafeTensors:** Directly handling the model weights for better control and understanding.
 - **Custom Inference Pipeline:** The entire pre/post-processing pipeline fully spelled out in code, from text to tokens to embeddings, and back to text.
 
