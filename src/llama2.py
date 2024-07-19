@@ -6,9 +6,8 @@ import math
 Implementation of llama 2 in Pytorch
 
 Notable observations:
-    - Llama 7B does NOT use grouped query attention. GQA is purely an efficiency optimization that slightly hurts performance. 7B is small enough to not need it.
     - Llama uses Gated Linear Units in its MLP block. I was wondering why the safetensors had "ffn_gate" tensors, got super confused as this isnt a mixture of experts arch haha
-    - Llama uses Silu instead of Relu in the MLP block
+    - Llama uses Silu instead of Relu in the MLP block!
 """
 
 
