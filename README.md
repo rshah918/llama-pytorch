@@ -6,7 +6,7 @@ Let's build Llama 2 from scratch in PyTorch!
 
 This project implements the Llama 2 neural net architecture from scratch in PyTorch. It includes a manually written inference pipeline to showcase how LLM's can be created and used without relying on pre-built inference frameworks. My personal laptop is a 16GB M2 Macbook Air, so we will be using a 1.1 Billion parameter variant of Llama 2, trained by the [TinyLlama team](https://github.com/jzhang38/TinyLlama), deployed to Apple Metal Performance Shaders (mps) 
 
-### Key features of this implementation:
+### Highlights:
 - **Grouped Query Attention:** An efficient variant of multihead attention, also used in Llama 3.
 - **Gated Linear Unit (GLU):** Newer GPT variants use GLUs in the MLP block of each Decoder layer.
 - **Manual Loading of SafeTensors:** Directly handling the model weights for better control and understanding.
