@@ -4,15 +4,14 @@ Let's build Llama 2 from scratch in PyTorch!
 
 ## Overview
 
-This project implements the Llama 2 neural net architecture from scratch in PyTorch. It includes a manually written inference pipeline to showcase how LLM's can be created and used without relying on pre-built inference frameworks. My personal laptop is a 16GB M2 Macbook Air, so we will be using a 1.1 Billion parameter variant of Llama 2, trained by the [TinyLlama team](https://github.com/jzhang38/TinyLlama), deployed to Apple Metal Performance Shaders (mps) 
+This project implements the Llama 2 neural net architecture from scratch in PyTorch. It includes a manually written inference pipeline to showcase how LLM's can be created and used without blindly relying on pre-built inference frameworks. My personal laptop is a 16GB M2 Macbook Air, so we will be using a 1.1 Billion parameter variant of Llama 2, trained by the [TinyLlama team](https://github.com/jzhang38/TinyLlama), deployed to Apple Metal Performance Shaders (mps) 
 
 ### Highlights:
-- **Grouped Query Attention:** An efficient variant of multihead attention, also used in Llama 3.
-- **Gated Linear Unit (GLU):** Newer GPT variants use GLUs in the MLP block of each decoder layer.
-- **Manual Loading of SafeTensors:** Directly handling the model weights for better control and understanding.
-- **Custom Inference Pipeline:** The entire pre/post-processing pipeline fully spelled out in code, from text to tokens to embeddings, and back to text.
+- **Llama 2 Implementation:** Includes Grouped Query Attention and Gated Linear Units (GLUs), same as Llama 3 and newer GPT variants.
+- **Manual Loading of SafeTensors:** Manually reading the weights file and loading each tensor.
+- **Inference Pipeline:** The entire pre/post-processing pipeline fully spelled out in code, from text to tokens to embeddings, and back to text.
 
-The purpose of this project is to provide a hands-on learning experience for building and deploying a sophisticated language model. By constructing Llama 2 from the ground up, you will gain insight into the architecture and mechanics of state-of-the-art LLM's, as well as practical experience in managing model weights, tokenization, and inference.
+The purpose of this project is to understand how to build and deploy a sophisticated language model beyond small toy examples. Constructing Llama 2 from the ground up generates insight into the architecture and mechanics of state-of-the-art LLM's, as well as practical experience in managing model weights, tokenization, and inference.
 
 ## Setup
 
