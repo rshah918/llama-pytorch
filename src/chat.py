@@ -4,14 +4,29 @@ import torch
 from llama2 import Decoder
 import gradio as gr
 import torch._dynamo
+from typing import Generator
 
 torch._dynamo.config.suppress_errors = True
 
 
+def format_prompt(prompt: str, history: list[dict[str, str]]) -> str:
+    formatted_message_history = ""
+    for message in history:
+        if message["role"] == "user":
+            formatted_message_history += f"""<|user|>{message["content"]}</s>"""
+        else:
+            formatted_message_history += f"""<|assistant|>{message["content"]}</s>"""
+    if prompt != "":
+        formatted_message_history += f"<|user|>{prompt}</s>"
+
+    formatted_prompt = f"""{formatted_message_history}<|assistant|>"""
+    return formatted_prompt
+
+
 @torch.inference_mode()
-def chat(prompt, history):
+def chat(prompt: str, history: list[dict[str, str]]) -> Generator[str, None, None]:
     tokenizer = get_tokenizer(tokenizer_path="models/tokenizer.model")
-    formatted_prompt = f"""<|user|>{prompt}</s><|assistant|>"""
+    formatted_prompt = format_prompt(prompt, history)
     tokenized_prompt: list[int] = tokenizer.encode(formatted_prompt)
     model_response = []
     stop_strings = ["<|user|>", "<|system|>", "</s>"]
@@ -59,6 +74,7 @@ tok = time()
 print("Loaded weights in: ", tok - tik, " seconds")
 gr.ChatInterface(
     chat,
+    type="messages",
     css=CSS,
     title="Llama 1.1B",
     description="Chat with a 1.1 Billion parameter variant of Llama 2!",
