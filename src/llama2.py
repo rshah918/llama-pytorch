@@ -11,7 +11,7 @@ Notable observations:
 """
 
 
-def rotate_half(x):
+def rotate_half(x: torch.Tensor) -> torch.Tensor:
     """
     GPT-NeoX style rotary embeddings.
 
@@ -32,15 +32,64 @@ def rotate_half(x):
     return torch.cat((-x2, x1), dim=-1)  # perform rotation
 
 
-def apply_rotary_embeddings(q, k, cos, sin, position_ids):
+def apply_rotary_embeddings(
+    q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, position_ids: torch.Tensor
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """
+    Applies rotary positional embeddings to the query (q) and key (k) tensors with an explicit rotation matrix.
+
+    This version implements the rotation matrix multiplication directly for each pair of dimensions
+    in the query and key vectors, making it easier to understand but less compute-efficient.
+
+    For each embedding [q1, q2], the rotation is applied as follows:
+    [ cos(θ)  -sin(θ) ] [ q1 ]
+    [ sin(θ)   cos(θ) ] [ q2 ]
+
+    This results in the rotated embedding:
+    [ q1 * cos(θ) - q2 * sin(θ) ]
+    [ q1 * sin(θ) + q2 * cos(θ) ]
+
+    Args:
+        q (torch.Tensor): Query tensor with shape [batch, seq_len, dim].
+        k (torch.Tensor): Key tensor with shape [batch, seq_len, dim].
+        cos (torch.Tensor): Precomputed cos(θ) values for each position, shape [seq_len, dim].
+        sin (torch.Tensor): Precomputed sin(θ) values for each position, shape [seq_len, dim].
+        position_ids (torch.Tensor): Tensor indicating position indices, shape [seq_len].
+
+    Returns:
+        tuple[torch.Tensor, torch.Tensor]: The rotated query and key tensors,
+        both with shape [batch, seq_len, dim].
+    """
     cos = cos[position_ids].unsqueeze(1)  # [seq_len, 1, dim]
     sin = sin[position_ids].unsqueeze(1)  # [seq_len, 1, dim]
-    q_embed = (q * cos) + (rotate_half(q) * sin)
-    k_embed = (k * cos) + (rotate_half(k) * sin)
+
+    cos_first_half = cos[..., : cos.shape[-1] // 2]  # First half of cos(θ)
+    cos_second_half = cos[..., cos.shape[-1] // 2 :]  # Second half of cos(θ)
+    sin_first_half = sin[..., : sin.shape[-1] // 2]  # First half of sin(θ)
+    sin_second_half = sin[..., sin.shape[-1] // 2 :]  # Second half of sin(θ)
+
+    # Split the query and key vectors into two halves
+    q1 = q[..., : q.shape[-1] // 2]  # First half of the query
+    q2 = q[..., q.shape[-1] // 2 :]  # Second half of the query
+    k1 = k[..., : k.shape[-1] // 2]  # First half of the key
+    k2 = k[..., k.shape[-1] // 2 :]  # Second half of the key
+
+    # Apply the rotation to the query vectors
+    q_rot1 = q1 * cos_first_half - q2 * sin_second_half  # q1 * cos(θ) - q2 * sin(θ)
+    q_rot2 = q1 * sin_first_half + q2 * cos_second_half  # q1 * sin(θ) + q2 * cos(θ)
+    q_embed = torch.cat([q_rot1, q_rot2], dim=-1)  # Combine the rotated halves
+
+    # Apply the rotation to the key vectors
+    k_rot1 = k1 * cos_first_half - k2 * sin_second_half  # k1 * cos(θ) - k2 * sin(θ)
+    k_rot2 = k1 * sin_first_half + k2 * cos_second_half  # k1 * sin(θ) + k2 * cos(θ)
+    k_embed = torch.cat([k_rot1, k_rot2], dim=-1)  # Combine the rotated halves
+
     return q_embed, k_embed
 
 
-def generate_rotation_magnitudes(max_seq_len: int, embedding_dim: int, device: torch.device, dtype: torch.dtype):
+def generate_rotation_magnitudes(
+    max_seq_len: int, embedding_dim: int, device: torch.device, dtype: torch.dtype
+) -> tuple[torch.Tensor, torch.Tensor]:
     """
     Calculate vector rotation magnitudes.
 
