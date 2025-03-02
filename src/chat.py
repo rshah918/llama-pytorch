@@ -1,7 +1,7 @@
 from time import time
-from src.load_weights import get_device, get_tokenizer, load_weights
+from utils.load_weights import get_device, get_tokenizer, load_weights
 import torch
-from llama2 import Decoder
+from models.llama2 import Llama
 import gradio as gr
 import torch._dynamo
 from typing import Generator
@@ -25,12 +25,12 @@ def format_prompt(prompt: str, history: list[dict[str, str]]) -> str:
 
 @torch.inference_mode()
 def chat(prompt: str, history: list[dict[str, str]]) -> Generator[str, None, None]:
-    tokenizer = get_tokenizer(tokenizer_path="models/tokenizer.model")
+    tokenizer = get_tokenizer(tokenizer_path="src/models/tokenizer.model")
     formatted_prompt = format_prompt(prompt, history)
     tokenized_prompt: list[int] = tokenizer.encode(formatted_prompt)
     model_response = []
     stop_strings = ["<|user|>", "<|system|>", "</s>"]
-    for i in range(2048 - len(tokenized_prompt)):
+    for _ in range(2048 - len(tokenized_prompt)):
         tik = time()
         out = model.forward(torch.as_tensor(tokenized_prompt + model_response, device=get_device()))
         tok = time()
@@ -52,7 +52,7 @@ CSS = """
 #chatbot { flex-grow: 1; overflow: auto;}
 """
 
-model = Decoder(
+model = Llama(
     vocab_size=32000,
     num_decoder_layers=22,
     num_attention_heads=32,
@@ -65,7 +65,7 @@ model = Decoder(
 model = torch.compile(model=model, backend="aot_eager")
 tik = time()
 load_weights(
-    safetensor_path="models/model.safetensors",
+    safetensor_path="src/models/model.safetensors",
     model=model,
     device=get_device(),
     dtype=torch.float16,

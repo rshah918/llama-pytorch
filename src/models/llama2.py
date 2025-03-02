@@ -292,7 +292,7 @@ class DecoderLayer(nn.Module):
         return out
 
 
-class Decoder(nn.Module):
+class Llama(nn.Module):
     def __init__(
         self,
         vocab_size,
@@ -304,7 +304,7 @@ class Decoder(nn.Module):
         intermediate_size,
         device,
     ):
-        super(Decoder, self).__init__()
+        super(Llama, self).__init__()
         self.device = device
         # Chain together multiple decoder layers.
         self.decoder_layers = nn.Sequential(

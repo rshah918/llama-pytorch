@@ -6,7 +6,7 @@ from tqdm import tqdm
 from sentencepiece import SentencePieceProcessor
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import numpy as np
-from llama2 import Decoder
+from models.llama2 import Llama
 
 
 def get_model_size_in_gb(model: torch.nn.Module) -> float:
@@ -18,7 +18,7 @@ def get_model_size_in_gb(model: torch.nn.Module) -> float:
 
 
 def load_layer_weights(
-    layer_index: int, weights, model: Decoder, dtype: torch.types._dtype, device: torch.types.Device
+    layer_index: int, weights, model: Llama, dtype: torch.types._dtype, device: torch.types.Device
 ) -> None:
     # some tensors dont belong to any layer. I just treat i==-1 as a flag to load those tensors in its own thread
     if layer_index == -1:
