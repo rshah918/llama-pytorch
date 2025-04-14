@@ -63,11 +63,6 @@ def apply_rotary_embeddings(
     cos = cos[position_ids].unsqueeze(1)  # [seq_len, 1, dim]
     sin = sin[position_ids].unsqueeze(1)  # [seq_len, 1, dim]
 
-    cos_first_half = cos[..., : cos.shape[-1] // 2]  # First half of cos(θ)
-    cos_second_half = cos[..., cos.shape[-1] // 2 :]  # Second half of cos(θ)
-    sin_first_half = sin[..., : sin.shape[-1] // 2]  # First half of sin(θ)
-    sin_second_half = sin[..., sin.shape[-1] // 2 :]  # Second half of sin(θ)
-
     # Split the query and key vectors into two halves
     q1 = q[..., : q.shape[-1] // 2]  # First half of the query
     q2 = q[..., q.shape[-1] // 2 :]  # Second half of the query
@@ -75,13 +70,13 @@ def apply_rotary_embeddings(
     k2 = k[..., k.shape[-1] // 2 :]  # Second half of the key
 
     # Apply the rotation to the query vectors
-    q_rot1 = q1 * cos_first_half - q2 * sin_second_half  # q1 * cos(θ) - q2 * sin(θ)
-    q_rot2 = q1 * sin_first_half + q2 * cos_second_half  # q1 * sin(θ) + q2 * cos(θ)
+    q_rot1 = q1 * cos - q2 * sin  # q1 * cos(θ) - q2 * sin(θ)
+    q_rot2 = q1 * sin + q2 * cos  # q1 * sin(θ) + q2 * cos(θ)
     q_embed = torch.cat([q_rot1, q_rot2], dim=-1)  # Combine the rotated halves
 
     # Apply the rotation to the key vectors
-    k_rot1 = k1 * cos_first_half - k2 * sin_second_half  # k1 * cos(θ) - k2 * sin(θ)
-    k_rot2 = k1 * sin_first_half + k2 * cos_second_half  # k1 * sin(θ) + k2 * cos(θ)
+    k_rot1 = k1 * cos - k2 * sin  # k1 * cos(θ) - k2 * sin(θ)
+    k_rot2 = k1 * sin + k2 * cos  # k1 * sin(θ) + k2 * cos(θ)
     k_embed = torch.cat([k_rot1, k_rot2], dim=-1)  # Combine the rotated halves
 
     return q_embed, k_embed
@@ -122,7 +117,6 @@ def generate_rotation_magnitudes(
     theta = 1.0 / (theta_base ** (emb_positions / embedding_dim))  # calculate rotation magnitudes
     theta = sequence_positions * theta.unsqueeze(1)  # unsqueeze for broadcast and complete theta calculation
     theta = theta.transpose(0, 1)  # transpose to get shape (max_seq_len, embedding_dim/2)
-    theta = torch.cat((theta, theta), dim=-1)
     # (sequence_len, embedding_dim)
     cos = torch.cos(theta)
     sin = torch.sin(theta)
@@ -318,7 +312,7 @@ class Llama(nn.Module):
                     intermediate_size,
                     device,
                 )
-                for i in range(num_decoder_layers)
+                for _ in range(num_decoder_layers)
             ]
         )
         # Output layer creates a probability distribution across your vocabulary for each token in the input sequence.
