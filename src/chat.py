@@ -27,22 +27,46 @@ def format_prompt(prompt: str, history: list[dict[str, str]]) -> str:
 def chat(prompt: str, history: list[dict[str, str]]) -> Generator[str, None, None]:
     tokenizer = get_tokenizer(tokenizer_path="src/models/tokenizer.model")
     formatted_prompt = format_prompt(prompt, history)
-    tokenized_prompt: list[int] = tokenizer.encode(formatted_prompt)
-    model_response = []
+    prompt_tokens: list[int] = tokenizer.encode(formatted_prompt)
+    model_response_tokens: list[int] = []
     stop_strings = ["<|user|>", "<|system|>", "</s>"]
-    for _ in range(2048 - len(tokenized_prompt)):
+
+    print(f"Raw prompt: {prompt}")
+    print(f"Formatted prompt: {formatted_prompt}")
+    print(f"Formatted prompt token length: {len(prompt_tokens)}")
+
+    # Prefill stage: Build KV caches
+    if len(prompt_tokens) > 1:
+        print("Prefill!!!!!")
+        out = model.forward(torch.as_tensor(prompt_tokens, device=get_device()))
+        model_response_tokens.append(out.item())
+
+    print(f"Post pre-fill token list length: {len(prompt_tokens) + len(model_response_tokens)}")
+    print("========================")
+
+    # Decode stage: Model input is just the last token
+    for _ in range(2048 - len(prompt_tokens) - len(model_response_tokens)):
         tik = time()
-        out = model.forward(torch.as_tensor(tokenized_prompt + model_response, device=get_device()))
+        last_token = prompt_tokens[-1] if len(model_response_tokens) == 0 else model_response_tokens[-1]
+        out = model.forward(torch.as_tensor([last_token], device=get_device()))
         tok = time()
         elapsed = tok - tik
-        print((1 / elapsed), " Tokens per second")
+        print((1 / elapsed), " prompt_tokens per second")
         out = out.item()
-        model_response.append(out)
-        decoded_model_response = tokenizer.decode(model_response)
+        model_response_tokens.append(out)
+        print(f"token list length: {len(prompt_tokens) + len(model_response_tokens)}")
+        decoded_model_response = tokenizer.decode(model_response_tokens)
+        print(f"Decoded Model Response: {decoded_model_response}")
+        print("========================")
+        if len(model_response_tokens == 2):
+            break
         if any(stop_string in decoded_model_response for stop_string in stop_strings):
             break
         yield decoded_model_response
 
+
+# why did tracking response prompt_tokens seperately fix the issue???
+# chat() return value is the entire AI chat bubble, AKA all GENERATED tokens only
 
 # address a gradio bug where the chat window doesnt fill up the screen, css taken from: https://github.com/gradio-app/gradio/issues/4001#issuecomment-1636785196
 CSS = """
@@ -62,7 +86,7 @@ model = Llama(
     intermediate_size=5632,
     device=get_device(),
 )
-model = torch.compile(model=model, backend="aot_eager")
+# model = torch.compile(model=model, backend="aot_eager")
 tik = time()
 load_weights(
     safetensor_path="src/models/model.safetensors",

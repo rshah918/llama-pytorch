@@ -33,53 +33,44 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 
 
 def apply_rotary_embeddings(
-    q: torch.Tensor, k: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, position_ids: torch.Tensor
+    input_tensor: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, position_ids: torch.Tensor
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """
-    Applies rotary positional embeddings to the query (q) and key (k) tensors with an explicit rotation matrix.
+    Applies rotary positional embeddings to the input tensor with an explicit rotation matrix.
 
     This version implements the rotation matrix multiplication directly for each pair of dimensions
-    in the query and key vectors, making it easier to understand but less compute-efficient.
+    in the input tensor, making it easier to understand but less compute-efficient.
 
-    For each embedding [q1, q2], the rotation is applied as follows:
-    [ cos(θ)  -sin(θ) ] [ q1 ]
-    [ sin(θ)   cos(θ) ] [ q2 ]
+    For each embedding [first_half, second_half], the rotation is applied as follows:
+    [ cos(θ)  -sin(θ) ] [ first_half ]
+    [ sin(θ)   cos(θ) ] [ second_half ]
 
     This results in the rotated embedding:
-    [ q1 * cos(θ) - q2 * sin(θ) ]
-    [ q1 * sin(θ) + q2 * cos(θ) ]
+    [ first_half * cos(θ) - second_half * sin(θ) ]
+    [ first_half * sin(θ) + second_half * cos(θ) ]
 
     Args:
-        q (torch.Tensor): Query tensor with shape [batch, seq_len, dim].
-        k (torch.Tensor): Key tensor with shape [batch, seq_len, dim].
+        input_tensor (torch.Tensor): Input tensor with shape [batch, seq_len, dim].
         cos (torch.Tensor): Precomputed cos(θ) values for each position, shape [seq_len, dim].
         sin (torch.Tensor): Precomputed sin(θ) values for each position, shape [seq_len, dim].
         position_ids (torch.Tensor): Tensor indicating position indices, shape [seq_len].
 
     Returns:
-        tuple[torch.Tensor, torch.Tensor]: The rotated query and key tensors,
-        both with shape [batch, seq_len, dim].
+        torch.Tensor: The rotated tensor with shape [batch, seq_len, dim].
     """
     cos = cos[position_ids].unsqueeze(1)  # [seq_len, 1, dim]
     sin = sin[position_ids].unsqueeze(1)  # [seq_len, 1, dim]
 
     # Split the query and key vectors into two halves
-    q1 = q[..., : q.shape[-1] // 2]  # First half of the query
-    q2 = q[..., q.shape[-1] // 2 :]  # Second half of the query
-    k1 = k[..., : k.shape[-1] // 2]  # First half of the key
-    k2 = k[..., k.shape[-1] // 2 :]  # Second half of the key
+    first_half = input_tensor[..., : input_tensor.shape[-1] // 2]  # First half of the input tensor
+    second_half = input_tensor[..., input_tensor.shape[-1] // 2 :]  # Second half of the input tensor
 
     # Apply the rotation to the query vectors
-    q_rot1 = q1 * cos - q2 * sin  # q1 * cos(θ) - q2 * sin(θ)
-    q_rot2 = q1 * sin + q2 * cos  # q1 * sin(θ) + q2 * cos(θ)
-    q_embed = torch.cat([q_rot1, q_rot2], dim=-1)  # Combine the rotated halves
+    first_half_rotated = first_half * cos - second_half * sin  # q1 * cos(θ) - q2 * sin(θ)
+    second_half_rotated = first_half * sin + second_half * cos  # q1 * sin(θ) + q2 * cos(θ)
+    rotated_result = torch.cat([first_half_rotated, second_half_rotated], dim=-1)  # Combine the rotated halves
 
-    # Apply the rotation to the key vectors
-    k_rot1 = k1 * cos - k2 * sin  # k1 * cos(θ) - k2 * sin(θ)
-    k_rot2 = k1 * sin + k2 * cos  # k1 * sin(θ) + k2 * cos(θ)
-    k_embed = torch.cat([k_rot1, k_rot2], dim=-1)  # Combine the rotated halves
-
-    return q_embed, k_embed
+    return rotated_result
 
 
 def generate_rotation_magnitudes(
@@ -158,21 +149,35 @@ class GroupedQueryAttention(nn.Module):
         self.w_k = nn.Linear(embedding_dim, num_kv_heads * head_dim, device=device, bias=False)
         self.w_v = nn.Linear(embedding_dim, num_kv_heads * head_dim, device=device, bias=False)
         self.w_o = nn.Linear(num_query_heads * head_dim, embedding_dim, device=device, bias=False)
+        self.kv_cache = None
 
     def forward(self, x, mask=None):
-        len_sequence = x.shape[0]
-        # Get query, key, and value
-        query = self.w_q(x)
-        key = self.w_k(x)
-        value = self.w_v(x)
-        # add batch dim
-        query = torch.unsqueeze(query, 0)
-        key = torch.unsqueeze(key, 0)
-        value = torch.unsqueeze(value, 0)
-        # (batch, seq, num_heads, head_dim)
-        query = query.view(1, len_sequence, self.num_query_heads, self.head_dim)
-        key = key.view(1, len_sequence, self.num_kv_heads, self.head_dim)
-        value = value.view(1, len_sequence, self.num_kv_heads, self.head_dim)
+        query_length = x.shape[0]  # [query_length, emb_dim] during prefill, [1, emb_dim] during generation
+        # Calculate query, key, and value
+        query = self.w_q(x)  # [query_length, num_query_heads * head_dim] = [query_length, 32*64] = [query_length, 2048]
+        key = self.w_k(x)  # [query_length, num_kv_heads * head_dim] = [1, 4*64] = [query_length, 256]
+        print(f"query shape: {query.shape}")
+        print(f"key shape: {key.shape}")
+        value = self.w_v(x)  # Same as key
+        # Seperate out heads
+        query = query.view(query_length, self.num_query_heads, self.head_dim)  # [query_length, 32, 64]
+        key = key.view(query_length, self.num_kv_heads, self.head_dim)  # [query_length, 4, 64]
+        value = value.view(query_length, self.num_kv_heads, self.head_dim)
+
+        print(f"query shape: {query.shape}")
+        print(f"key shape: {key.shape}")
+
+        # KV cache lookup
+        if self.kv_cache is not None:
+            key = torch.cat([self.kv_cache["key"], key], dim=0)  # [total_seq_length, num_kv_heads, head_dim]
+            value = torch.cat([self.kv_cache["value"], value], dim=0)
+        # Update KV Cache
+        self.kv_cache = {"key": key, "value": value}
+        total_seq_length = key.shape[0]
+
+        print(f"query shape after cache lookup: {query.shape}")
+        print(f"key shape after cache lookup: {key.shape}")
+
         # rotary position embeddings
         cos, sin = generate_rotation_magnitudes(
             max_seq_len=self.max_seq_len,
@@ -180,34 +185,56 @@ class GroupedQueryAttention(nn.Module):
             device=self.device,
             dtype=torch.float16,
         )
-        query, key = apply_rotary_embeddings(query, key, cos, sin, torch.arange(0, len_sequence))
-        # remove batch dimension
-        query = query[0]
-        key = key[0]
-        value = value[0]
+        # Apply rotary embeddings
+        position_ids = torch.arange(0, total_seq_length)
+        query = apply_rotary_embeddings(query, cos, sin, position_ids[-query_length:])
+        key = apply_rotary_embeddings(key, cos, sin, position_ids)
+
         # repeat each key/value tensor (num_query_heads/num_kv_heads) times to match the number of query heads
-        key = torch.repeat_interleave(key, repeats=self.num_query_heads // self.num_kv_heads, dim=1)
-        value = torch.repeat_interleave(
-            value, repeats=self.num_query_heads // self.num_kv_heads, dim=1
-        )  # (seq_len, num_query_heads, head_dim) since num_kv_heads is equal to num_query heads now
+        # (total_seq_length, num_query_heads, head_dim)
+        key = key.repeat_interleave(repeats=self.num_query_heads // self.num_kv_heads, dim=1)
+        value = value.repeat_interleave(repeats=self.num_query_heads // self.num_kv_heads, dim=1)
 
-        query = query.transpose(0, 1)  # (n_query, seqlen, head_dim)
-        key = key.transpose(0, 1)  # (n_query, seqlen, head_dim)
-        value = value.transpose(0, 1)  # (n_query, seqlen, head_dim)
-        attention_scores = torch.matmul(query, key.transpose(1, 2)) / math.sqrt(
-            self.head_dim
-        )  # (num_query_heads, seq_len, seq_len)
-        mask = torch.tril(torch.ones((x.shape[0], len_sequence), device=query.device)).unsqueeze(
-            0
-        )  # (1, seq_len, seq_len)
-        attention_scores = attention_scores.masked_fill(mask == 0, float("-inf"))
-        attention_scores = nn.functional.softmax(attention_scores, -1)
-        out = torch.matmul(attention_scores, value)  # (num_query_heads, seq_len, head_dim)
+        print(f"key shape after kv expansion: {key.shape}")
 
-        out = out.transpose(0, 1)  # (seq_len, num_query_heads, head_dim)
-        out = out.reshape(x.shape[0], self.embedding_dim)  # (seq_len, embedding_dim)
+        query = query.transpose(0, 1)  # (num_query_heads, query_length, head_dim)
+        key = key.transpose(0, 1)  # (num_query_heads, total_seq_length, head_dim)
+        value = value.transpose(0, 1)  # (num_query_heads, total_seq_length, head_dim)
+
+        print(f"query shape after transpose: {query.shape}")
+        print(f"key shape after transpose: {key.shape}")
+
+        attention_scores = torch.matmul(query, key.transpose(1, 2)) / math.sqrt(self.head_dim)
+        # (num_query_heads, query_length, total_seq_length)
+
+        print(f"attention scores shape: {attention_scores.shape}")
+
+        mask = torch.triu(
+            torch.ones((query_length, total_seq_length), device=query.device),
+            diagonal=total_seq_length - query_length + 1,
+        ).unsqueeze(0)  # [1, query_length, total_seq_length]
+
+        print(f"mask shape: {mask.shape}")
+
+        attention_scores = attention_scores.masked_fill(mask == 1, float("-inf"))
+        attention_scores = nn.functional.softmax(attention_scores, dim=-1)
+        out = torch.matmul(attention_scores, value)  # (num_query_heads, query_length, head_dim)
+
+        print(f"output shape: {out.shape}")
+
+        out = out.transpose(0, 1)  # (query_length, num_query_heads, head_dim)
+
+        print(f"output shape after transpose: {out.shape}")
+
+        out = out.reshape(x.shape[0], self.embedding_dim)  # (query_length, embedding_dim)
+
+        print(f"output shape after reshape: {out.shape}")
+
         out = self.w_o(out)
-        return out  # (seq_len, embedding_dim)
+
+        print(f"output shape after projection: {out.shape}")
+
+        return out  # (query_length, embedding_dim)
 
 
 class RMSNorm(nn.Module):
@@ -254,22 +281,23 @@ class DecoderLayer(nn.Module):
         head_dim,
         num_kv_heads,
         len_embedding,
-        len_sequence,
+        query_length,
         intermediate_size,
         device,
     ):
         super(DecoderLayer, self).__init__()
         self.grouped_query_attention = GroupedQueryAttention(
-            num_attention_heads, head_dim, num_kv_heads, len_embedding, len_sequence, device=device
+            num_attention_heads, head_dim, num_kv_heads, len_embedding, query_length, device=device
         )
         self.attention_norm = RMSNorm(len_embedding, device=device)
         self.feedforward_norm = RMSNorm(len_embedding, device=device)
         self.feedforward = GatedLinearUnit(len_embedding, intermediate_size, device=device)
+        self.device = device
 
     def forward(self, x):
         # generate causal mask
         seq_len = x.shape[0]
-        mask = torch.tril(torch.ones((seq_len, seq_len), device=torch.device("mps"))).float()
+        mask = torch.tril(torch.ones((seq_len, seq_len), device=self.device)).float()
         mask = mask.masked_fill(mask == 0, float("-inf")).masked_fill(mask == 1, float(0.0))
         # 1: Normalize input
         attention_normalized_x = self.attention_norm.forward(x)
@@ -329,3 +357,10 @@ class Llama(nn.Module):
         logits = logits[-1, :]  # pull the probability distribution for the last token in the sequence
         probabilities = nn.functional.softmax(logits, dim=-1)  # convert to softmax probability distribution
         return torch.argmax(probabilities, dim=-1)  # get the token index for the next most likely token in the sequence
+
+
+"""
+3.7670135498046875e-05, 0.0038700103759765625, 0.0023975372314453125, 0.0038700103759765625, -0.0032863616943359375, 
+-0.00257110595703125, 0.0006995201110839844, 0.0029735565185546875, -0.0012941360473632812, 0.0038700103759765625, 
+-0.003757476806640625, 0.0021152496337890625, 0.0038700103759765625, -0.0032863616943359375
+"""
