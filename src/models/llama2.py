@@ -11,32 +11,15 @@ Notable observations:
 """
 
 
-def rotate_half(x: torch.Tensor) -> torch.Tensor:
+def apply_rotary_embeddings(
+    input_tensor: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, position_ids: torch.Tensor
+) -> torch.Tensor:
     """
-    GPT-NeoX style rotary embeddings.
-
-    This function splits the input tensor into two halves along the embedding dimension and then rotates them by 90 degrees
+    GPT-NeoX style rotary embeddings. This function splits the input tensor into two halves along the embedding dimension and then rotates them by 90 degrees
 
     For more details, see:
     - Roformer paper: https://arxiv.org/pdf/2104.09864
     - GPT-NeoX paper: https://arxiv.org/pdf/2204.06745
-
-    Args:
-        x (torch.Tensor): Input tensor with shape (..., 2 * d), where d is the dimension of the rotary embeddings.
-
-    Returns:
-        torch.Tensor: Output tensor with the halves rotated, shape (..., 2 * d).
-    """
-    x1 = x[..., : x.shape[-1] // 2]  # first half of the embeddings
-    x2 = x[..., x.shape[-1] // 2 :]  # second half of the embeddings
-    return torch.cat((-x2, x1), dim=-1)  # perform rotation
-
-
-def apply_rotary_embeddings(
-    input_tensor: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, position_ids: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Applies rotary positional embeddings to the input tensor with an explicit rotation matrix.
 
     This version implements the rotation matrix multiplication directly for each pair of dimensions
     in the input tensor, making it easier to understand but less compute-efficient.
@@ -145,27 +128,32 @@ class GroupedQueryAttention(nn.Module):
         self.head_dim = head_dim
         self.max_seq_len = max_seq_len
         self.device = device
+        self.cos, self.sin = generate_rotation_magnitudes(
+            max_seq_len=max_seq_len,
+            embedding_dim=self.head_dim,
+            device=self.device,
+            dtype=torch.float16,
+        )
+        self.mask = torch.triu(
+            torch.ones((max_seq_len, max_seq_len), device=self.device),
+            diagonal=1,
+        ).unsqueeze(0)  # [1, query_length, total_seq_length]
         self.w_q = nn.Linear(embedding_dim, num_query_heads * head_dim, device=device, bias=False)
         self.w_k = nn.Linear(embedding_dim, num_kv_heads * head_dim, device=device, bias=False)
         self.w_v = nn.Linear(embedding_dim, num_kv_heads * head_dim, device=device, bias=False)
         self.w_o = nn.Linear(num_query_heads * head_dim, embedding_dim, device=device, bias=False)
         self.kv_cache = None
 
-    def forward(self, x, mask=None):
+    def forward(self, x):
         query_length = x.shape[0]  # [query_length, emb_dim] during prefill, [1, emb_dim] during generation
         # Calculate query, key, and value
         query = self.w_q(x)  # [query_length, num_query_heads * head_dim] = [query_length, 32*64] = [query_length, 2048]
         key = self.w_k(x)  # [query_length, num_kv_heads * head_dim] = [1, 4*64] = [query_length, 256]
-        print(f"query shape: {query.shape}")
-        print(f"key shape: {key.shape}")
         value = self.w_v(x)  # Same as key
         # Seperate out heads
         query = query.view(query_length, self.num_query_heads, self.head_dim)  # [query_length, 32, 64]
         key = key.view(query_length, self.num_kv_heads, self.head_dim)  # [query_length, 4, 64]
         value = value.view(query_length, self.num_kv_heads, self.head_dim)
-
-        print(f"query shape: {query.shape}")
-        print(f"key shape: {key.shape}")
 
         # KV cache lookup
         if self.kv_cache is not None:
@@ -175,64 +163,33 @@ class GroupedQueryAttention(nn.Module):
         self.kv_cache = {"key": key, "value": value}
         total_seq_length = key.shape[0]
 
-        print(f"query shape after cache lookup: {query.shape}")
-        print(f"key shape after cache lookup: {key.shape}")
-
-        # rotary position embeddings
-        cos, sin = generate_rotation_magnitudes(
-            max_seq_len=self.max_seq_len,
-            embedding_dim=self.head_dim,
-            device=self.device,
-            dtype=torch.float16,
-        )
         # Apply rotary embeddings
-        position_ids = torch.arange(0, total_seq_length)
-        query = apply_rotary_embeddings(query, cos, sin, position_ids[-query_length:])
-        key = apply_rotary_embeddings(key, cos, sin, position_ids)
+        position_ids = torch.arange(0, total_seq_length, device=self.device)
+        query = apply_rotary_embeddings(query, self.cos, self.sin, position_ids[-query_length:])
+        key = apply_rotary_embeddings(key, self.cos, self.sin, position_ids)
 
         # repeat each key/value tensor (num_query_heads/num_kv_heads) times to match the number of query heads
         # (total_seq_length, num_query_heads, head_dim)
         key = key.repeat_interleave(repeats=self.num_query_heads // self.num_kv_heads, dim=1)
         value = value.repeat_interleave(repeats=self.num_query_heads // self.num_kv_heads, dim=1)
 
-        print(f"key shape after kv expansion: {key.shape}")
-
         query = query.transpose(0, 1)  # (num_query_heads, query_length, head_dim)
         key = key.transpose(0, 1)  # (num_query_heads, total_seq_length, head_dim)
         value = value.transpose(0, 1)  # (num_query_heads, total_seq_length, head_dim)
 
-        print(f"query shape after transpose: {query.shape}")
-        print(f"key shape after transpose: {key.shape}")
-
         attention_scores = torch.matmul(query, key.transpose(1, 2)) / math.sqrt(self.head_dim)
         # (num_query_heads, query_length, total_seq_length)
 
-        print(f"attention scores shape: {attention_scores.shape}")
-
-        mask = torch.triu(
-            torch.ones((query_length, total_seq_length), device=query.device),
-            diagonal=total_seq_length - query_length + 1,
-        ).unsqueeze(0)  # [1, query_length, total_seq_length]
-
-        print(f"mask shape: {mask.shape}")
-
+        mask = self.mask[
+            :, total_seq_length - query_length : total_seq_length, :total_seq_length
+        ]  # [1, query_length, total_seq, length]
         attention_scores = attention_scores.masked_fill(mask == 1, float("-inf"))
-        attention_scores = nn.functional.softmax(attention_scores, dim=-1)
+        attention_scores = nn.functional.softmax(attention_scores, dim=-1).to(value.dtype)
         out = torch.matmul(attention_scores, value)  # (num_query_heads, query_length, head_dim)
 
-        print(f"output shape: {out.shape}")
-
         out = out.transpose(0, 1)  # (query_length, num_query_heads, head_dim)
-
-        print(f"output shape after transpose: {out.shape}")
-
         out = out.reshape(x.shape[0], self.embedding_dim)  # (query_length, embedding_dim)
-
-        print(f"output shape after reshape: {out.shape}")
-
         out = self.w_o(out)
-
-        print(f"output shape after projection: {out.shape}")
 
         return out  # (query_length, embedding_dim)
 
@@ -281,13 +238,13 @@ class DecoderLayer(nn.Module):
         head_dim,
         num_kv_heads,
         len_embedding,
-        query_length,
+        max_seq_len,
         intermediate_size,
         device,
     ):
         super(DecoderLayer, self).__init__()
         self.grouped_query_attention = GroupedQueryAttention(
-            num_attention_heads, head_dim, num_kv_heads, len_embedding, query_length, device=device
+            num_attention_heads, head_dim, num_kv_heads, len_embedding, max_seq_len, device=device
         )
         self.attention_norm = RMSNorm(len_embedding, device=device)
         self.feedforward_norm = RMSNorm(len_embedding, device=device)
@@ -295,14 +252,10 @@ class DecoderLayer(nn.Module):
         self.device = device
 
     def forward(self, x):
-        # generate causal mask
-        seq_len = x.shape[0]
-        mask = torch.tril(torch.ones((seq_len, seq_len), device=self.device)).float()
-        mask = mask.masked_fill(mask == 0, float("-inf")).masked_fill(mask == 1, float(0.0))
         # 1: Normalize input
         attention_normalized_x = self.attention_norm.forward(x)
         # 2: MultiHead Self Attention
-        self_attention = self.grouped_query_attention.forward(attention_normalized_x, mask)
+        self_attention = self.grouped_query_attention.forward(attention_normalized_x)
         # 3: Skip connection
         skip_connection = x + self_attention
         # 4: Layer Normalization
@@ -322,7 +275,7 @@ class Llama(nn.Module):
         num_attention_heads,
         num_kv_heads,
         len_embedding,
-        len_sequence,
+        max_seq_len,
         intermediate_size,
         device,
     ):
@@ -336,7 +289,7 @@ class Llama(nn.Module):
                     len_embedding // num_attention_heads,
                     num_kv_heads,
                     len_embedding,
-                    len_sequence,
+                    max_seq_len,
                     intermediate_size,
                     device,
                 )
@@ -355,12 +308,4 @@ class Llama(nn.Module):
         output_norm = self.norm(decoder_layers_output)
         logits = self.output_layer(output_norm).float()  # shape: [seq_length, vocab_size]
         logits = logits[-1, :]  # pull the probability distribution for the last token in the sequence
-        probabilities = nn.functional.softmax(logits, dim=-1)  # convert to softmax probability distribution
-        return torch.argmax(probabilities, dim=-1)  # get the token index for the next most likely token in the sequence
-
-
-"""
-3.7670135498046875e-05, 0.0038700103759765625, 0.0023975372314453125, 0.0038700103759765625, -0.0032863616943359375, 
--0.00257110595703125, 0.0006995201110839844, 0.0029735565185546875, -0.0012941360473632812, 0.0038700103759765625, 
--0.003757476806640625, 0.0021152496337890625, 0.0038700103759765625, -0.0032863616943359375
-"""
+        return torch.argmax(logits, dim=-1)  # get the token index for the next most likely token in the sequence

@@ -25,7 +25,6 @@ def format_prompt(prompt: str, history: list[dict[str, str]]) -> str:
 
 @torch.inference_mode()
 def chat(prompt: str, history: list[dict[str, str]]) -> Generator[str, None, None]:
-    tokenizer = get_tokenizer(tokenizer_path="src/models/tokenizer.model")
     formatted_prompt = format_prompt(prompt, history)
     prompt_tokens: list[int] = tokenizer.encode(formatted_prompt)
     model_response_tokens: list[int] = []
@@ -51,15 +50,13 @@ def chat(prompt: str, history: list[dict[str, str]]) -> Generator[str, None, Non
         out = model.forward(torch.as_tensor([last_token], device=get_device()))
         tok = time()
         elapsed = tok - tik
-        print((1 / elapsed), " prompt_tokens per second")
+        print((1 / elapsed), " tokens per second")
         out = out.item()
         model_response_tokens.append(out)
         print(f"token list length: {len(prompt_tokens) + len(model_response_tokens)}")
         decoded_model_response = tokenizer.decode(model_response_tokens)
         print(f"Decoded Model Response: {decoded_model_response}")
         print("========================")
-        if len(model_response_tokens == 2):
-            break
         if any(stop_string in decoded_model_response for stop_string in stop_strings):
             break
         yield decoded_model_response
@@ -82,11 +79,12 @@ model = Llama(
     num_attention_heads=32,
     num_kv_heads=4,
     len_embedding=2048,
-    len_sequence=2048,
+    max_seq_len=2048,
     intermediate_size=5632,
     device=get_device(),
 )
-# model = torch.compile(model=model, backend="aot_eager")
+tokenizer = get_tokenizer(tokenizer_path="src/models/tokenizer.model")
+
 tik = time()
 load_weights(
     safetensor_path="src/models/model.safetensors",
